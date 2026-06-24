@@ -61,49 +61,15 @@ def detect_spill_events(df, time_col, value_col, threshold, merge_hours=12):
 
 
 # ======================================================
-# ROBUST AUTO DETECTION (FIXED)
-# ======================================================
-def detect_time_column(df):
-    for col in df.columns:
-        try:
-            parsed = pd.to_datetime(df[col], errors="raise")
-            if parsed.notna().mean() > 0.8:
-                df[col] = parsed
-                return col
-        except:
-            continue
-    return None
-
-
-def detect_level_column(df):
-    best_col = None
-    best_score = -1
-
-    for col in df.columns:
-        converted = pd.to_numeric(df[col], errors="coerce")
-        score = converted.notna().mean()
-
-        if score > best_score:
-            best_score = score
-            best_col = col
-
-    if best_score < 0.5:
-        return None
-
-    df[best_col] = pd.to_numeric(df[best_col], errors="coerce")
-    return best_col
-
-
-# ======================================================
 # LOAD DATA
 # ======================================================
-st.sidebar.title("Data Upload")
+st.sidebar.title("Upload Data")
 
-telemetry_file = st.sidebar.file_uploader("Upload Telemetry CSV", type=["csv"])
-model_file = st.sidebar.file_uploader("Upload Model CSV", type=["csv"])
+telemetry_file = st.sidebar.file_uploader("Telemetry CSV", type=["csv"])
+model_file = st.sidebar.file_uploader("Model CSV", type=["csv"])
 
 if telemetry_file is None or model_file is None:
-    st.title("📊 STW Comparison Dashboard")
+    st.title("📊 STW Dashboard")
     st.info("Upload BOTH telemetry and model CSV files")
     st.stop()
 
@@ -112,41 +78,36 @@ model = pd.read_csv(model_file)
 
 
 # ======================================================
-# CLEAN & PARSE
+# FORCE COLUMN STRUCTURE (A & B)
 # ======================================================
-def clean_numeric(df):
-    for col in df.columns:
-        df[col] = df[col].astype(str).str.replace("%", "", regex=False)
-        df[col] = df[col].str.replace(",", "", regex=False)
+try:
+    time_col = telemetry.columns[0]
+    telemetry_col = telemetry.columns[1]
+    model_col = model.columns[1]
+except:
+    st.error("❌ CSV must have at least 2 columns (A = time, B = value)")
+    st.stop()
+
+
+# ======================================================
+# CLEAN DATA
+# ======================================================
+def clean_data(df, time_col, value_col):
+    df[value_col] = (
+        df[value_col]
+        .astype(str)
+        .str.replace("%", "", regex=False)
+        .str.replace(",", "", regex=False)
+    )
+
+    df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
+    df[time_col] = pd.to_datetime(df[time_col], errors="coerce")
+
     return df
 
 
-telemetry = clean_numeric(telemetry)
-model = clean_numeric(model)
-
-
-# ======================================================
-# AUTO DETECT
-# ======================================================
-time_col = detect_time_column(telemetry)
-telemetry_col = detect_level_column(telemetry)
-model_col = detect_level_column(model)
-
-
-# ======================================================
-# SAFE FALLBACK (NO CRASH)
-# ======================================================
-if time_col is None:
-    st.warning("⚠️ Could not auto-detect time column")
-    time_col = st.selectbox("Select Time Column", telemetry.columns)
-
-if telemetry_col is None:
-    st.warning("⚠️ Could not detect telemetry column")
-    telemetry_col = st.selectbox("Select Telemetry Column", telemetry.columns)
-
-if model_col is None:
-    st.warning("⚠️ Could not detect model column")
-    model_col = st.selectbox("Select Model Column", model.columns)
+telemetry = clean_data(telemetry, time_col, telemetry_col)
+model = clean_data(model, time_col, model_col)
 
 
 # ======================================================
@@ -163,16 +124,11 @@ for p in ["Overview", "Comparison", "Spill Events", "Data"]:
 
 
 # ======================================================
-# MAIN CONTROLS
+# CONTROLS
 # ======================================================
-st.title("📊 Storm Tank Dashboard")
-
 threshold = st.sidebar.number_input("Spill Threshold (%)", value=100.0)
 
-# Ensure types
-telemetry[time_col] = pd.to_datetime(telemetry[time_col], errors="coerce")
-telemetry[telemetry_col] = pd.to_numeric(telemetry[telemetry_col], errors="coerce")
-model[model_col] = pd.to_numeric(model[model_col], errors="coerce")
+st.title("📊 Storm Tank Dashboard")
 
 
 # ======================================================
@@ -207,6 +163,7 @@ st.markdown("---")
 # PAGES
 # ======================================================
 page = st.session_state.page
+
 
 # -----------------------------
 # OVERVIEW
@@ -250,11 +207,11 @@ elif page == "Comparison":
 
 
 # -----------------------------
-# SPILL EVENTS + ANNUAL REPORT
+# SPILL EVENTS + ANNUAL
 # -----------------------------
 elif page == "Spill Events":
 
-    st.subheader("🚨 Spill Event Analysis")
+    st.subheader("🚨 Spill Event Analysis (EA 12-hour rule)")
 
     events_t = detect_spill_events(
         telemetry, time_col, telemetry_col, threshold
@@ -266,7 +223,7 @@ elif page == "Spill Events":
         model_temp, time_col, telemetry_col, threshold
     )
 
-    # ✅ Annual aggregation
+    # Add year
     if not events_t.empty:
         events_t["year"] = events_t["start"].dt.year
     if not events_m.empty:
@@ -283,8 +240,7 @@ elif page == "Spill Events":
     ).reset_index()
 
     annual = pd.merge(
-        annual_t,
-        annual_m,
+        annual_t, annual_m,
         on="year",
         how="outer",
         suffixes=("_telemetry", "_model")
@@ -293,13 +249,13 @@ elif page == "Spill Events":
     st.markdown("### Annual Summary")
     st.dataframe(annual)
 
-    # Event count chart
+    # Event comparison
     fig = go.Figure()
     fig.add_trace(go.Bar(x=annual["year"], y=annual["events_telemetry"], name="Telemetry"))
     fig.add_trace(go.Bar(x=annual["year"], y=annual["events_model"], name="Model"))
     st.plotly_chart(fig, use_container_width=True)
 
-    # Duration chart
+    # Duration comparison
     fig2 = go.Figure()
     fig2.add_trace(go.Bar(x=annual["year"], y=annual["duration_telemetry"], name="Telemetry Duration"))
     fig2.add_trace(go.Bar(x=annual["year"], y=annual["duration_model"], name="Model Duration"))
