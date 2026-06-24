@@ -6,15 +6,14 @@ st.set_page_config(layout="wide")
 
 
 # ======================================================
-# EA 12-HOUR SPILL EVENT DETECTION FUNCTION
+# EA SPILL EVENT DETECTION (12-HOUR RULE)
 # ======================================================
 def detect_spill_events(df, time_col, value_col, threshold, merge_hours=12):
 
     df = df.sort_values(time_col).copy()
     df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
 
-    # Flag threshold exceedance
-    df["in_spill"] = df[value_col] > threshold
+    df["in_spill"] = df[value_col] >= threshold
 
     events = []
     current_event = None
@@ -32,24 +31,20 @@ def detect_spill_events(df, time_col, value_col, threshold, merge_hours=12):
                 current_event["end"] = row[time_col]
 
         else:
-            if current_event is not None:
+            if current_event:
                 events.append(current_event)
                 current_event = None
 
     if current_event:
         events.append(current_event)
 
-    # -----------------------------
     # Merge events within 12 hours
-    # -----------------------------
     merged = []
-
     for event in events:
         if not merged:
             merged.append(event)
         else:
             last = merged[-1]
-
             gap = (event["start"] - last["end"]).total_seconds() / 3600
 
             if gap <= merge_hours:
@@ -57,9 +52,7 @@ def detect_spill_events(df, time_col, value_col, threshold, merge_hours=12):
             else:
                 merged.append(event)
 
-    # -----------------------------
-    # Calculate duration
-    # -----------------------------
+    # Add duration
     for e in merged:
         e["duration_hours"] = (
             e["end"] - e["start"]
@@ -69,28 +62,41 @@ def detect_spill_events(df, time_col, value_col, threshold, merge_hours=12):
 
 
 # ======================================================
-# LOAD DATA
+# FILE UPLOAD (TWO SOURCES)
 # ======================================================
-uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+st.sidebar.title("Data Upload")
 
-if uploaded_file is None:
-    st.title("📊 STW Dashboard")
-    st.info("Upload a CSV to begin")
+telemetry_file = st.sidebar.file_uploader("Upload Telemetry CSV", type=["csv"])
+model_file = st.sidebar.file_uploader("Upload Model CSV", type=["csv"])
+
+if telemetry_file is None or model_file is None:
+    st.title("📊 STW Comparison Dashboard")
+    st.info("Upload BOTH telemetry and model CSV files")
     st.stop()
 
-df = pd.read_csv(uploaded_file)
+telemetry = pd.read_csv(telemetry_file)
+model = pd.read_csv(model_file)
+
 
 # Auto parse datetime
-for col in df.columns:
-    try:
-        df[col] = pd.to_datetime(df[col])
-    except:
-        pass
+def parse_dates(df):
+    for col in df.columns:
+        try:
+            df[col] = pd.to_datetime(df[col])
+        except:
+            pass
+    return df
 
-columns = df.columns.tolist()
+
+telemetry = parse_dates(telemetry)
+model = parse_dates(model)
+
+columns_t = telemetry.columns.tolist()
+columns_m = model.columns.tolist()
+
 
 # ======================================================
-# NAVIGATION (HTML STYLE)
+# NAVIGATION
 # ======================================================
 st.sidebar.title("Navigation")
 
@@ -100,179 +106,151 @@ if "page" not in st.session_state:
 if st.sidebar.button("Overview"):
     st.session_state.page = "Overview"
 
-if st.sidebar.button("Thresholds"):
-    st.session_state.page = "Thresholds"
+if st.sidebar.button("Comparison"):
+    st.session_state.page = "Comparison"
+
+if st.sidebar.button("Spill Events"):
+    st.session_state.page = "Spill Events"
 
 if st.sidebar.button("Data"):
     st.session_state.page = "Data"
 
-if st.sidebar.button("Summary"):
-    st.session_state.page = "Summary"
-
 
 # ======================================================
-# TOP HALF (HEADER + MAIN GRAPH)
+# TOP PANEL (MAIN CHART)
 # ======================================================
-top1, top2 = st.columns([2, 1])
+st.title("📊 Storm Tank Dashboard (Telemetry vs Model)")
 
-with top1:
-    st.title("📊 Storm Tank Dashboard")
-
-with top2:
-    st.markdown(f"""
-    **Rows:** {len(df)}  
-    **Columns:** {len(df.columns)}
-    """)
-
-# Axis selection
 col1, col2 = st.columns(2)
-x_axis = col1.selectbox("Time / X-axis", columns)
-y_axis = col2.selectbox("Level / Y-axis", columns)
 
-# Threshold input
-threshold = st.sidebar.number_input("Spill Threshold", value=0.0)
+time_col = col1.selectbox("Time column (Telemetry)", columns_t)
+telemetry_col = col2.selectbox("Telemetry Level", columns_t)
 
-# Ensure types
-df[x_axis] = pd.to_datetime(df[x_axis], errors="coerce")
-df[y_axis] = pd.to_numeric(df[y_axis], errors="coerce")
+model_col = st.sidebar.selectbox("Model Level Column", columns_m)
 
-# Main chart
-st.markdown("### Main Time Series")
-
-main_fig = go.Figure()
-
-main_fig.add_trace(go.Scatter(
-    x=df[x_axis],
-    y=df[y_axis],
-    mode="lines",
-    name="Level"
-))
-
-main_fig.add_hline(
-    y=threshold,
-    line_dash="dash",
-    line_color="red"
+threshold = st.sidebar.number_input(
+    "Spill Threshold (%)",
+    value=100.0
 )
 
-st.plotly_chart(main_fig, use_container_width=True)
+# Ensure types
+telemetry[time_col] = pd.to_datetime(telemetry[time_col], errors="coerce")
+telemetry[telemetry_col] = pd.to_numeric(telemetry[telemetry_col], errors="coerce")
 
+model[telemetry_col] = pd.to_numeric(model[model_col], errors="coerce")
 
 # ======================================================
-# BOTTOM HALF (LIKE YOUR HTML)
+# MAIN CHART (OVERLAY)
 # ======================================================
+st.markdown("### Telemetry vs Model")
+
+fig = go.Figure()
+
+fig.add_trace(go.Scatter(
+    x=telemetry[time_col],
+    y=telemetry[telemetry_col],
+    name="Telemetry",
+    line=dict(color="blue")
+))
+
+fig.add_trace(go.Scatter(
+    x=telemetry[time_col],
+    y=model[model_col],
+    name="Model",
+    line=dict(color="orange")
+))
+
+fig.add_hline(y=threshold, line_dash="dash", line_color="red")
+
+st.plotly_chart(fig, use_container_width=True)
+
 st.markdown("---")
 
-sidebar_col, content_col = st.columns([1, 5])
 
-# LEFT NAV BUTTONS (visual only)
-with sidebar_col:
-    st.markdown("### Views")
-    st.write("Use the sidebar buttons")
+# ======================================================
+# PAGE CONTENT
+# ======================================================
+if st.session_state.page == "Overview":
+
+    st.subheader("Overview")
+
+    col1, col2 = st.columns(2)
+
+    col1.metric("Telemetry Rows", len(telemetry))
+    col2.metric("Model Rows", len(model))
 
 
 # ======================================================
-# RIGHT CONTENT AREA
+# COMPARISON PAGE
 # ======================================================
-with content_col:
+elif st.session_state.page == "Comparison":
 
-    # -----------------------------
-    # OVERVIEW
-    # -----------------------------
-    if st.session_state.page == "Overview":
+    st.subheader("Performance Comparison")
 
-        st.subheader("Overview")
+    merged = pd.merge(
+        telemetry[[time_col, telemetry_col]],
+        model[[time_col, model_col]],
+        on=time_col,
+        how="inner"
+    )
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Rows", len(df))
-        col2.metric("Columns", len(df.columns))
+    merged["error"] = merged[telemetry_col] - merged[model_col]
 
-        numeric_cols = df.select_dtypes(include="number").columns
-        if len(numeric_cols) > 0:
-            col3.metric("Avg", round(df[numeric_cols[0]].mean(), 2))
+    fig = go.Figure()
 
-        st.dataframe(df)
+    fig.add_trace(go.Scatter(
+        x=merged[time_col],
+        y=merged["error"],
+        name="Error (Telemetry - Model)"
+    ))
 
-    # -----------------------------
-    # THRESHOLDS (EA LOGIC)
-    # -----------------------------
-    elif st.session_state.page == "Thresholds":
+    st.plotly_chart(fig, use_container_width=True)
 
-        st.subheader("🚨 EA Spill Event Detection (12 Hour Rule)")
+    st.metric("Mean Error", round(merged["error"].mean(), 2))
 
-        events_df = detect_spill_events(
-            df,
-            x_axis,
-            y_axis,
-            threshold
-        )
 
-        # PLOT WITH EVENTS
-        fig = go.Figure()
+# ======================================================
+# SPILL EVENTS PAGE
+# ======================================================
+elif st.session_state.page == "Spill Events":
 
-        fig.add_trace(go.Scatter(
-            x=df[x_axis],
-            y=df[y_axis],
-            mode="lines",
-            name="Level"
-        ))
+    st.subheader("🚨 EA Spill Event Comparison")
 
-        fig.add_hline(y=threshold, line_dash="dash", line_color="red")
+    events_telemetry = detect_spill_events(
+        telemetry,
+        time_col,
+        telemetry_col,
+        threshold
+    )
 
-        # Highlight events
-        for _, e in events_df.iterrows():
-            fig.add_vrect(
-                x0=e["start"],
-                x1=e["end"],
-                fillcolor="red",
-                opacity=0.2,
-                line_width=0
-            )
+    events_model = detect_spill_events(
+        model.rename(columns={model_col: telemetry_col}),
+        time_col,
+        telemetry_col,
+        threshold
+    )
 
-        st.plotly_chart(fig, use_container_width=True)
+    col1, col2 = st.columns(2)
 
-        # METRICS
-        st.subheader("Event Summary")
+    col1.metric("Telemetry Events", len(events_telemetry))
+    col2.metric("Model Events", len(events_model))
 
-        col1, col2 = st.columns(2)
+    st.markdown("### Telemetry Events")
+    st.dataframe(events_telemetry)
 
-        col1.metric("Spill Events", len(events_df))
+    st.markdown("### Model Events")
+    st.dataframe(events_model)
 
-        total_duration = (
-            events_df["duration_hours"].sum()
-            if not events_df.empty else 0
-        )
 
-        col2.metric("Total Duration (hrs)", round(total_duration, 2))
+# ======================================================
+# DATA PAGE
+# ======================================================
+elif st.session_state.page == "Data":
 
-        # TABLE
-        st.subheader("Detected Events")
-        st.dataframe(events_df)
+    st.subheader("Raw Data")
 
-    # -----------------------------
-    # DATA EXPLORER
-    # -----------------------------
-    elif st.session_state.page == "Data":
+    st.markdown("### Telemetry")
+    st.dataframe(telemetry)
 
-        st.subheader("Data Explorer")
-
-        filter_col = st.selectbox("Filter column", columns)
-        values = df[filter_col].dropna().unique()
-
-        selected = st.multiselect("Values", values, default=values[:10])
-
-        filtered = df[df[filter_col].isin(selected)]
-
-        st.dataframe(filtered)
-
-    # -----------------------------
-    # SUMMARY TABLES
-    # -----------------------------
-    elif st.session_state.page == "Summary":
-
-        st.subheader("Summary")
-
-        st.markdown("### Statistics")
-        st.dataframe(df.describe())
-
-        st.markdown("### Missing Values")
-        st.dataframe(df.isnull().sum())
+    st.markdown("### Model")
+    st.dataframe(model)
