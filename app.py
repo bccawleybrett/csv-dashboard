@@ -279,3 +279,42 @@ elif page == "Spill Events":
 
     annual_m = events_m.groupby("year").agg(
         events=("start", "count"),
+        duration=("duration_hours", "sum")
+    ).reset_index()
+
+    annual = pd.merge(
+        annual_t,
+        annual_m,
+        on="year",
+        how="outer",
+        suffixes=("_telemetry", "_model")
+    ).fillna(0)
+
+    st.markdown("### Annual Summary")
+    st.dataframe(annual)
+
+    # Event count chart
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=annual["year"], y=annual["events_telemetry"], name="Telemetry"))
+    fig.add_trace(go.Bar(x=annual["year"], y=annual["events_model"], name="Model"))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Duration chart
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(x=annual["year"], y=annual["duration_telemetry"], name="Telemetry Duration"))
+    fig2.add_trace(go.Bar(x=annual["year"], y=annual["duration_model"], name="Model Duration"))
+    st.plotly_chart(fig2, use_container_width=True)
+
+
+# -----------------------------
+# DATA
+# -----------------------------
+elif page == "Data":
+
+    st.subheader("Raw Data")
+
+    st.markdown("### Telemetry")
+    st.dataframe(telemetry)
+
+    st.markdown("### Model")
+    st.dataframe(model)
