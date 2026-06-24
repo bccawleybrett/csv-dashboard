@@ -69,7 +69,7 @@ telemetry_file = st.sidebar.file_uploader("Telemetry CSV", type=["csv"])
 model_file = st.sidebar.file_uploader("Model CSV", type=["csv"])
 
 if telemetry_file is None or model_file is None:
-    st.title("📊 STW Dashboard")
+    st.title("📊 Dashboard")
     st.info("Upload BOTH telemetry and model CSV files")
     st.stop()
 
@@ -128,7 +128,7 @@ for p in ["Overview", "Comparison", "Spill Events", "Data"]:
 # ======================================================
 threshold = st.sidebar.number_input("Spill Threshold (%)", value=100.0)
 
-st.title("📊 Storm Tank Dashboard")
+st.title("📊 Dashboard")
 
 
 # ======================================================
